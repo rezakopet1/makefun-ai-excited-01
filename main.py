@@ -1,329 +1,346 @@
 #!/usr/bin/env python3
-"""Round 3 — "THE SKY UNZIPS".
+"""ai-excited-01 ROUND 4 — "HEY JUDGE! THE MOON IS DANCING"
 
-A giant zipper tears the night sky open and a blazing sunrise pours out
-of the rip. An impossible object, drawn fully procedurally: no stock
-explosion, no firework — just the sky coming undone, a sun where the
-stars used to be, and birds escaping through the tear.
-
-Pure Python 3 stdlib (math / os / random / struct / zlib). Deterministic:
-fixed seed, no wall clock, no network. Two runs -> byte-identical PNG.
+A giant disco-ball moon hangs over a night city. Its mirror tiles throw
+beams of magenta, cyan and gold across the sky while tiny people dance on
+a rooftop below. The twist: the moon — the calmest thing in the sky —
+is the party. Pure Python stdlib, fully deterministic, no network.
 """
 import math
 import os
-import random
 import struct
 import zlib
 
 W = H = 1024
-SEED = 20261116
-rng = random.Random(SEED)
+
+# ---------------------------------------------------------------- RNG (fixed)
+_state = 20261116
+
+
+def rnd():
+    global _state
+    _state = (_state * 1103515245 + 12345) & 0x7FFFFFFF
+    return _state / 0x7FFFFFFF
+
+
+def rint(a, b):
+    return a + int(rnd() * (b - a + 1))
+
+
+# ---------------------------------------------------------------- canvas
+class Canvas:
+    def __init__(self):
+        self.px = bytearray(W * H * 3)
+
+    def set(self, x, y, c):
+        if 0 <= x < W and 0 <= y < H:
+            i = (y * W + x) * 3
+            self.px[i], self.px[i + 1], self.px[i + 2] = c
+
+    def blend(self, x, y, c, a):
+        """Blend colour c over pixel with alpha a (0..255)."""
+        if 0 <= x < W and 0 <= y < H:
+            i = (y * W + x) * 3
+            self.px[i] = (c[0] * a + self.px[i] * (255 - a)) // 255
+            self.px[i + 1] = (c[1] * a + self.px[i + 1] * (255 - a)) // 255
+            self.px[i + 2] = (c[2] * a + self.px[i + 2] * (255 - a)) // 255
+
+    def rect(self, x0, y0, x1, y1, c):
+        x0 = max(0, x0); y0 = max(0, y0)
+        x1 = min(W - 1, x1); y1 = min(H - 1, y1)
+        for y in range(y0, y1 + 1):
+            i = (y * W + x0) * 3
+            for x in range(x0, x1 + 1):
+                self.px[i], self.px[i + 1], self.px[i + 2] = c
+                i += 3
+
+    def hline(self, x0, x1, y, c):
+        if y < 0 or y >= H:
+            return
+        x0 = max(0, x0); x1 = min(W - 1, x1)
+        i = (y * W + x0) * 3
+        for _ in range(x0, x1 + 1):
+            self.px[i], self.px[i + 1], self.px[i + 2] = c
+            i += 3
+
+    def disc(self, cx, cy, r, c):
+        for dy in range(-r, r + 1):
+            dx = int(math.sqrt(max(0, r * r - dy * dy)))
+            self.hline(cx - dx, cx + dx, cy + dy, c)
+
+    def ring(self, cx, cy, r, thick, c):
+        for dy in range(-r - thick, r + thick + 1):
+            d2 = dy * dy
+            outer = int(math.sqrt(max(0, (r + thick) ** 2 - d2)))
+            inner = int(math.sqrt(max(0, r * r - d2))) if abs(dy) <= r else -1
+            if inner >= 0:
+                self.hline(cx - outer, cx - inner - 1, cy + dy, c)
+                self.hline(cx + inner + 1, cx + outer, cy + dy, c)
+            else:
+                self.hline(cx - outer, cx + outer, cy + dy, c)
+
+    def line(self, x0, y0, x1, y1, c, w=1):
+        dx = abs(x1 - x0); dy = -abs(y1 - y0)
+        sx = 1 if x0 < x1 else -1
+        sy = 1 if y0 < y1 else -1
+        err = dx + dy
+        while True:
+            for oy in range(-(w // 2), w // 2 + 1):
+                for ox in range(-(w // 2), w // 2 + 1):
+                    self.set(x0 + ox, y0 + oy, c)
+            if x0 == x1 and y0 == y1:
+                break
+            e2 = 2 * err
+            if e2 >= dy:
+                err += dy; x0 += sx
+            if e2 <= dx:
+                err += dx; y0 += sy
+
+    def poly(self, pts, c, alpha=255):
+        """Scanline fill of a simple polygon."""
+        ys = [p[1] for p in pts]
+        for y in range(max(0, min(ys)), min(H - 1, max(ys)) + 1):
+            xs = []
+            n = len(pts)
+            for i in range(n):
+                x0, y0 = pts[i]
+                x1, y1 = pts[(i + 1) % n]
+                if (y0 <= y < y1) or (y1 <= y < y0):
+                    t = (y - y0) / (y1 - y0)
+                    xs.append(int(x0 + t * (x1 - x0)))
+            xs.sort()
+            for k in range(0, len(xs) - 1, 2):
+                if alpha == 255:
+                    self.hline(xs[k], xs[k + 1], y, c)
+                else:
+                    for x in range(max(0, xs[k]), min(W - 1, xs[k + 1]) + 1):
+                        self.blend(x, y, c, alpha)
+
+
+# ---------------------------------------------------------------- 5x7 font
+FONT = {
+    "A": ["01110", "10001", "10001", "11111", "10001", "10001", "10001"],
+    "C": ["01110", "10001", "10000", "10000", "10000", "10001", "01110"],
+    "D": ["11110", "10001", "10001", "10001", "10001", "10001", "11110"],
+    "E": ["11111", "10000", "10000", "11110", "10000", "10000", "11111"],
+    "G": ["01110", "10001", "10000", "10111", "10001", "10001", "01111"],
+    "H": ["10001", "10001", "10001", "11111", "10001", "10001", "10001"],
+    "I": ["01110", "00100", "00100", "00100", "00100", "00100", "01110"],
+    "J": ["00111", "00010", "00010", "00010", "00010", "10010", "01100"],
+    "M": ["10001", "11011", "10101", "10101", "10001", "10001", "10001"],
+    "N": ["10001", "11001", "10101", "10011", "10001", "10001", "10001"],
+    "O": ["01110", "10001", "10001", "10001", "10001", "10001", "01110"],
+    "S": ["01111", "10000", "10000", "01110", "00001", "00001", "11110"],
+    "T": ["11111", "00100", "00100", "00100", "00100", "00100", "00100"],
+    "U": ["10001", "10001", "10001", "10001", "10001", "10001", "01110"],
+    "Y": ["10001", "10001", "01010", "00100", "00100", "00100", "00100"],
+    "!": ["00100", "00100", "00100", "00100", "00100", "00000", "00100"],
+    " ": ["00000", "00000", "00000", "00000", "00000", "00000", "00000"],
+}
+
+
+def draw_text(cv, text, cx, y, scale, colour, outline):
+    widths = [5 * scale + scale for _ in text]
+    total = sum(widths) - scale
+    x = cx - total // 2
+    for ch in text:
+        g = FONT.get(ch, FONT[" "])
+        for row in range(7):
+            for col in range(5):
+                if g[row][col] == "1":
+                    # outline: stamp the scaled block shifted in 8 dirs
+                    for ox, oy in ((-2, 0), (2, 0), (0, -2), (0, 2),
+                                   (-2, -2), (2, -2), (-2, 2), (2, 2)):
+                        cv.rect(x + col * scale + ox, y + row * scale + oy,
+                                x + col * scale + scale - 1 + ox,
+                                y + row * scale + scale - 1 + oy, outline)
+                    cv.rect(x + col * scale, y + row * scale,
+                            x + col * scale + scale - 1,
+                            y + row * scale + scale - 1, colour)
+        x += 6 * scale
 
 
 # ---------------------------------------------------------------- palette
+NAVY_TOP = (8, 12, 48)
+VIOLET_BOT = (52, 16, 74)
+SILVER = (196, 205, 220)
+SILVER_DK = (120, 130, 155)
+GOLD = (255, 210, 63)
+MAGENTA = (255, 60, 180)
+CYAN = (45, 220, 255)
+WHITE = (255, 255, 255)
+INK = (10, 8, 26)
+BUILDING = (16, 12, 38)
+WINDOW = (255, 214, 120)
+
+MOON_CX, MOON_CY, MOON_R = 512, 505, 268
+
+
 def lerp(a, b, t):
     return tuple(int(a[i] + (b[i] - a[i]) * t) for i in range(3))
 
 
-def grad(stops, t):
-    """stops: list of (pos, rgb). Interpolate."""
-    if t <= stops[0][0]:
-        return stops[0][1]
-    for i in range(1, len(stops)):
-        if t <= stops[i][0]:
-            p0, c0 = stops[i - 1]
-            p1, c1 = stops[i]
-            return lerp(c0, c1, (t - p0) / (p1 - p0))
-    return stops[-1][1]
+def draw(cv):
+    # 1. sky gradient
+    for y in range(H):
+        c = lerp(NAVY_TOP, VIOLET_BOT, y / (H - 1))
+        cv.hline(0, W - 1, y, c)
 
+    # 2. stars
+    for _ in range(260):
+        x = rint(0, W - 1); y = rint(0, 700)
+        b = rint(140, 255)
+        cv.set(x, y, (b, b, min(255, b + 20)))
+        if rnd() < 0.12:
+            cv.set(x + 1, y, (b, b, b)); cv.set(x, y + 1, (b, b, b))
 
-NIGHT = [(0.0, (7, 9, 44)), (0.45, (24, 16, 72)),
-         (0.75, (56, 22, 96)), (1.0, (94, 30, 108))]
-SUNRISE = [(0.0, (255, 44, 138)), (0.40, (255, 104, 38)),
-           (0.70, (255, 186, 58)), (1.0, (255, 232, 122))]
+    # 3. light beams fanning down from behind the moon.
+    # Screen coords: y grows downward, so a downward fan spans
+    # angles ~25..155 deg from the +x axis (90 deg = straight down).
+    beam_cols = [MAGENTA, CYAN, GOLD, MAGENTA, CYAN, GOLD, MAGENTA]
+    for k, col in enumerate(beam_cols):
+        ang = math.radians(25 + k * 21.6)
+        x0 = MOON_CX + int(150 * math.cos(ang))
+        y0 = MOON_CY + int(150 * math.sin(ang))
+        x1 = MOON_CX + int(1150 * math.cos(ang - 0.045))
+        y1 = MOON_CY + int(1150 * math.sin(ang - 0.045))
+        x2 = MOON_CX + int(1150 * math.cos(ang + 0.045))
+        y2 = MOON_CY + int(1150 * math.sin(ang + 0.045))
+        cv.poly([(x0, y0), (x1, y1), (x2, y2)], col, alpha=64)
 
-# Tear centreline: from top-left to bottom-right, gently wobbling.
-X0, Y0, X1, Y1 = 150.0, 10.0, 800.0, 850.0
+    # 3b. shooting star streaking past the moon (momentum).
+    # Kept in the empty left sky (x < 220, clear of text and moon).
+    cv.line(60, 260, 200, 340, WHITE, 3)
+    cv.line(60, 260, 170, 325, (255, 210, 63), 2)
+    cv.disc(60, 260, 6, WHITE)
+    cv.disc(200, 340, 3, WHITE)
 
+    # 4. glow halo behind the moon
+    for r, a in ((MOON_R + 90, 14), (MOON_R + 55, 22), (MOON_R + 25, 30)):
+        for dy in range(-r, r + 1):
+            dx = int(math.sqrt(max(0, r * r - dy * dy)))
+            for x in range(MOON_CX - dx, MOON_CX + dx + 1):
+                cv.blend(x, MOON_CY + dy, (150, 190, 255), a)
 
-def tear_cx(y):
-    t = y / H
-    return X0 + (X1 - X0) * t + 20.0 * math.sin(y * 0.013)
+    # 5. disco-ball moon: mirror tiles
+    cv.disc(MOON_CX, MOON_CY, MOON_R, SILVER_DK)
+    tile = 26
+    palette = [SILVER, (168, 178, 205), (140, 200, 225), (225, 150, 205),
+               (235, 205, 130), (110, 120, 148), (210, 220, 240)]
+    gx0 = MOON_CX - MOON_R
+    gy0 = MOON_CY - MOON_R
+    for gy in range(gy0, MOON_CY + MOON_R, tile):
+        for gx in range(gx0, MOON_CX + MOON_R, tile):
+            cx = gx + tile // 2; cy = gy + tile // 2
+            if (cx - MOON_CX) ** 2 + (cy - MOON_CY) ** 2 > (MOON_R - 6) ** 2:
+                continue
+            col = palette[rint(0, len(palette) - 1)]
+            # shade by position: upper-left tiles brighter (light source)
+            shade = 1.0 - 0.35 * ((cx - MOON_CX + MOON_R) / (2 * MOON_R)
+                                 + (cy - MOON_CY + MOON_R) / (2 * MOON_R)) / 2
+            col = tuple(max(0, min(255, int(v * shade))) for v in col)
+            cv.rect(gx + 2, gy + 2, gx + tile - 2, gy + tile - 2, col)
+            if rnd() < 0.06:  # mirror glint
+                cv.rect(gx + 4, gy + 4, gx + tile - 4, gy + tile - 4, WHITE)
+    cv.ring(MOON_CX, MOON_CY, MOON_R - 2, 4, (235, 240, 255))
+    # crescent highlight on the upper-left rim
+    for t in range(0, 101):
+        ang = math.radians(150 + t * 1.1)
+        x = MOON_CX + int((MOON_R - 8) * math.cos(ang))
+        y = MOON_CY + int((MOON_R - 8) * math.sin(ang))
+        cv.disc(x, y, 5, (255, 255, 255))
 
+    # 6. sparkle glints on the rim
+    for ang_deg, ln in ((35, 46), (125, 38), (215, 40), (305, 52)):
+        ang = math.radians(ang_deg)
+        x = MOON_CX + int((MOON_R + 6) * math.cos(ang))
+        y = MOON_CY + int((MOON_R + 6) * math.sin(ang))
+        cv.line(x - ln, y, x + ln, y, WHITE, 3)
+        cv.line(x, y - ln, x, y + ln, WHITE, 3)
 
-def tear_half(y):
-    return 118.0 + 34.0 * math.sin(y * 0.011 + 1.2) + 18.0 * math.sin(y * 0.031)
-
-
-SUN_C = (640.0, 760.0)   # sun disc centre, sitting in the tear
-SUN_R = 96.0
-
-
-# ---------------------------------------------------------------- canvas
-rows = []
-for y in range(H):
-    c = grad(NIGHT, y / H)
-    rows.append(bytearray(bytes(c) * W))
-
-
-def set_px(x, y, col):
-    if 0 <= x < W and 0 <= y < H:
-        r = rows[y]
-        i = x * 3
-        r[i], r[i + 1], r[i + 2] = col
-
-
-def blend_px(x, y, col, a):
-    """Alpha-blend col over the pixel (a in 0..1)."""
-    if 0 <= x < W and 0 <= y < H:
-        r = rows[y]
-        i = x * 3
-        r[i] = int(r[i] + (col[0] - r[i]) * a)
-        r[i + 1] = int(r[i + 1] + (col[1] - r[i + 1]) * a)
-        r[i + 2] = int(r[i + 2] + (col[2] - r[i + 2]) * a)
-
-
-def fill_rect(x0, y0, x1, y1, col):
-    x0 = max(0, int(x0)); y0 = max(0, int(y0))
-    x1 = min(W, int(x1)); y1 = min(H, int(y1))
-    if x1 <= x0 or y1 <= y0:
-        return
-    seg = bytes(col) * (x1 - x0)
-    for y in range(y0, y1):
-        rows[y][x0 * 3:x1 * 3] = seg
-
-
-def line(x0, y0, x1, y1, col, a=1.0):
-    """Simple DDA line, with optional alpha."""
-    dx = x1 - x0
-    dy = y1 - y0
-    n = int(max(abs(dx), abs(dy))) + 1
-    for i in range(n + 1):
-        t = i / n
-        if a >= 1.0:
-            set_px(int(x0 + dx * t), int(y0 + dy * t), col)
+    # 7. confetti drifting down from the moon
+    conf = [MAGENTA, CYAN, GOLD, WHITE, (120, 255, 170)]
+    for _ in range(150):
+        x = rint(20, W - 20); y = rint(200, 980)
+        c = conf[rint(0, len(conf) - 1)]
+        s = rint(3, 7)
+        if rnd() < 0.5:
+            cv.rect(x, y, x + s, y + s // 2, c)
         else:
-            blend_px(int(x0 + dx * t), int(y0 + dy * t), col, a)
+            cv.disc(x, y, s // 2 + 1, c)
+
+    # 8. city skyline
+    bx = 0
+    while bx < W:
+        bw = rint(52, 110)
+        bh = rint(90, 240)
+        top = 1024 - bh
+        cv.rect(bx, top, bx + bw, 1023, BUILDING)
+        # antenna on some towers
+        if rnd() < 0.3:
+            cv.line(bx + bw // 2, top, bx + bw // 2, top - 26, BUILDING, 3)
+            cv.set(bx + bw // 2, top - 28, (255, 80, 80))
+        # lit windows
+        for wy in range(top + 12, 1010, 26):
+            for wx in range(bx + 8, bx + bw - 8, 20):
+                if rnd() < 0.42:
+                    wc = WINDOW if rnd() < 0.75 else (CYAN if rnd() < 0.5 else MAGENTA)
+                    cv.rect(wx, wy, wx + 8, wy + 12, wc)
+        bx += bw + rint(2, 14)
+
+    # 9. rooftop party: one flat roof in the middle foreground
+    roof_y = 800
+    cv.rect(392, roof_y, 632, 1023, (24, 18, 52))
+    cv.rect(392, roof_y, 632, roof_y + 6, (40, 30, 80))
+    # string lights across the roof
+    for i in range(13):
+        x = 400 + i * 19
+        y = roof_y - 14 + int(10 * math.sin(i * 0.9))
+        cv.disc(x, y, 4, [GOLD, MAGENTA, CYAN, (120, 255, 170)][i % 4])
+    # tiny dancing figures, arms up
+    dancers = [(420, MAGENTA), (470, CYAN), (512, GOLD),
+               (556, (120, 255, 170)), (600, WHITE)]
+    for i, (dx, col) in enumerate(dancers):
+        dy = roof_y - 26 - (6 if i % 2 else 0)
+        cv.disc(dx, dy - 26, 7, col)                      # head
+        cv.line(dx, dy - 19, dx, dy + 2, col, 4)          # body
+        cv.line(dx, dy - 14, dx - 13, dy - 30, col, 3)    # arm L up
+        cv.line(dx, dy - 14, dx + 13, dy - 30, col, 3)    # arm R up
+        cv.line(dx, dy + 2, dx - 9, dy + 22, col, 3)      # leg L
+        cv.line(dx, dy + 2, dx + 9, dy + 22, col, 3)      # leg R
+
+    # 10. text to the judge
+    draw_text(cv, "HEY JUDGE!", 512, 44, 11, GOLD, INK)
+    draw_text(cv, "THE MOON IS DANCING", 512, 168, 5, WHITE, INK)
 
 
-# ---------------------------------------------------------------- stars
-for _ in range(420):
-    sx = rng.randrange(W)
-    sy = rng.randrange(700)
-    b = rng.choice([150, 190, 220, 255])
-    col = (b, b, min(255, b + 20))
-    set_px(sx, sy, col)
-    if rng.random() < 0.22:  # a few brighter stars get a cross sparkle
-        set_px(sx - 1, sy, col)
-        set_px(sx + 1, sy, col)
-        set_px(sx, sy - 1, col)
-        set_px(sx, sy + 1, col)
-    if rng.random() < 0.10:  # tiny 2x2 star
-        set_px(sx + 1, sy + 1, col)
-
-# ---------------------------------------------------------------- moon (crescent, top right)
-MC = (872.0, 128.0)
-MR = 62.0
-OC = (898.0, 110.0)   # occluder circle -> crescent
-OR = 56.0
-for yy in range(int(MC[1] - MR - 2), int(MC[1] + MR + 3)):
-    for xx in range(int(MC[0] - MR - 2), int(MC[0] + MR + 3)):
-        d1 = (xx - MC[0]) ** 2 + (yy - MC[1]) ** 2
-        d2 = (xx - OC[0]) ** 2 + (yy - OC[1]) ** 2
-        if d1 <= MR * MR and d2 > OR * OR:
-            t = max(0.0, min(1.0, (yy - (MC[1] - MR)) / (2 * MR)))
-            set_px(xx, yy, lerp((250, 238, 190), (214, 196, 140), t))
-
-# ---------------------------------------------------------------- sun glow spilling past the tear
-for yy in range(int(SUN_C[1] - 330), int(SUN_C[1] + 331)):
-    for xx in range(int(SUN_C[0] - 330), int(SUN_C[0] + 331)):
-        d = math.hypot(xx - SUN_C[0], yy - SUN_C[1])
-        if d < 330.0:
-            a = (1.0 - d / 330.0) ** 2 * 0.55
-            blend_px(xx, yy, (255, 170, 60), a)
-
-# ---------------------------------------------------------------- the tear: sunrise inside
-for y in range(H):
-    cx = tear_cx(y)
-    hw = tear_half(y)
-    left = int(cx - hw)
-    right = int(cx + hw)
-    v = y / H
-    span = max(1, right - left)
-    for x in range(max(0, left), min(W, right)):
-        u = (x - left) / span
-        col = grad(SUNRISE, v * 0.72 + u * 0.28)
-        # bright core down the middle of the rip
-        core = (1.0 - abs(u - 0.5) * 2.0)
-        if core > 0.25:
-            col = lerp(col, (255, 246, 214), (core - 0.25) * 0.55)
-        # faint horizontal heat shimmer
-        sh = int(10.0 * math.sin(x * 0.045 + y * 0.021))
-        rows[y][x * 3] = max(0, min(255, col[0] + sh))
-        rows[y][x * 3 + 1] = max(0, min(255, col[1] + sh))
-        rows[y][x * 3 + 2] = max(0, min(255, col[2] + sh))
-
-# ---------------------------------------------------------------- sun disc
-for yy in range(int(SUN_C[1] - SUN_R - 1), int(SUN_C[1] + SUN_R + 2)):
-    for xx in range(int(SUN_C[0] - SUN_R - 1), int(SUN_C[0] + SUN_R + 2)):
-        d = math.hypot(xx - SUN_C[0], yy - SUN_C[1])
-        if d <= SUN_R:
-            t = d / SUN_R
-            if t < 0.5:
-                col = lerp((255, 252, 230), (255, 214, 110), t * 2.0)
-            else:
-                col = lerp((255, 214, 110), (255, 158, 40), (t - 0.5) * 2.0)
-            set_px(xx, yy, col)
-# sun rays: short spokes just outside the disc
-for k in range(16):
-    ang = k * math.pi / 8.0 + 0.19
-    r0 = SUN_R + 12.0
-    r1 = SUN_R + 34.0 + (26.0 if k % 2 == 0 else 0.0)
-    line(SUN_C[0] + r0 * math.cos(ang), SUN_C[1] + r0 * math.sin(ang),
-         SUN_C[0] + r1 * math.cos(ang), SUN_C[1] + r1 * math.sin(ang),
-         (255, 214, 110), 0.85)
-
-# ---------------------------------------------------------------- zipper teeth along both edges
-SILVER = (206, 214, 230)
-DARK = (120, 128, 150)
-for y in range(28, H - 60, 26):
-    cx = tear_cx(y)
-    hw = tear_half(y)
-    for ex, sgn in ((cx - hw, -1), (cx + hw, 1)):
-        tx = int(ex)
-        # tooth: small block straddling the edge, tilted by the tear slope
-        fill_rect(tx - 7 if sgn < 0 else tx - 3, y - 5,
-                  tx + 3 if sgn < 0 else tx + 7, y + 5, SILVER)
-        fill_rect(tx - 7 if sgn < 0 else tx - 3, y + 3,
-                  tx + 3 if sgn < 0 else tx + 7, y + 5, DARK)
-
-# ---------------------------------------------------------------- zipper slider + pull tab at the tear tip
-TIP = (X1, Y1)  # (800, 850) — where the rip is still opening
-# slider body: small block hugging the tip
-fill_rect(TIP[0] - 26, TIP[1] - 34, TIP[0] + 30, TIP[1] + 6, (168, 178, 198))
-fill_rect(TIP[0] - 18, TIP[1] - 26, TIP[0] + 22, TIP[1] - 2, (206, 214, 230))
-# pull tab: polygon along the tear direction, hanging below the slider
-dx, dy = 0.56, 0.83          # tear direction (normalised-ish)
-px, py = 0.83, -0.56         # perpendicular
-CC = (TIP[0] + 30 * dx, TIP[1] + 30 * dy)
-L, Wd = 100.0, 58.0
-corners = []
-for s1, s2 in ((-1, -1), (1, -1), (1, 1), (-1, 1)):
-    corners.append((CC[0] + s1 * L / 2 * dx + s2 * Wd / 2 * px,
-                    CC[1] + s1 * L / 2 * dy + s2 * Wd / 2 * py))
-# scanline fill of the tab polygon
-edges = []
-n = len(corners)
-for i in range(n):
-    x0, y0 = corners[i]
-    x1, y1 = corners[(i + 1) % n]
-    edges.append((x0, y0, x1, y1))
-ymin = int(min(c[1] for c in corners))
-ymax = int(max(c[1] for c in corners))
-for yy in range(ymin, ymax + 1):
-    xs = []
-    for x0, y0, x1, y1 in edges:
-        if y0 == y1:
-            continue
-        if min(y0, y1) <= yy < max(y0, y1):
-            xs.append(x0 + (yy - y0) * (x1 - x0) / (y1 - y0))
-    xs.sort()
-    for i in range(0, len(xs) - 1, 2):
-        fill_rect(xs[i], yy, xs[i + 1], yy + 1, (196, 204, 222))
-# tab outline + ring hole + grip slot
-for x0, y0, x1, y1 in edges:
-    line(x0, y0, x1, y1, (110, 118, 142))
-ring_c = (CC[0] - 34 * dx, CC[1] - 34 * dy)
-for k in range(64):
-    a = k * math.pi * 2 / 64
-    set_px(int(ring_c[0] + 24 * math.cos(a)), int(ring_c[1] + 24 * math.sin(a)),
-           (110, 118, 142))
-    set_px(int(ring_c[0] + 19 * math.cos(a)), int(ring_c[1] + 19 * math.sin(a)),
-           (110, 118, 142))
-# motion streaks trailing the pull — the rip is still moving
-for k in range(9):
-    bx = TIP[0] + 44 + k * 20
-    by = TIP[1] - 30 - k * 14
-    line(bx, by, bx + 38, by - 24, (255, 255, 255), 0.5 - k * 0.04)
-
-# ---------------------------------------------------------------- birds escaping through the tear
-BIRD = (18, 16, 52)
-birds = [(300, 300, 32), (388, 218, 24), (252, 428, 36), (486, 336, 22),
-         (560, 178, 18), (196, 528, 28), (430, 470, 20)]
-for bx, by, s in birds:
-    line(bx - s, by - s * 0.45, bx, by, BIRD)
-    line(bx, by, bx + s, by - s * 0.45, BIRD)
-    line(bx - s, by - s * 0.45, bx - s + 3, by - s * 0.45 + 3, BIRD)
-    line(bx + s, by - s * 0.45, bx + s - 3, by - s * 0.45 + 3, BIRD)
-
-# speed streaks ripping along the tear edges in the night sky
-for k in range(14):
-    y = 120 + k * 62
-    cx = tear_cx(y)
-    hw = tear_half(y)
-    side = -1 if k % 2 == 0 else 1
-    x0 = cx + side * (hw + 26 + (k % 3) * 18)
-    line(x0, y, x0 + 54 * side, y - 40, (255, 255, 255), 0.35)
-
-# ---------------------------------------------------------------- text (5x7 bitmap font, my own glyphs)
-FONT = {
-    "J": ("..###", "...#.", "...#.", "...#.", "...#.", "#..#.", ".##.."),
-    "U": ("#...#", "#...#", "#...#", "#...#", "#...#", "#...#", ".###."),
-    "D": ("####.", "#...#", "#...#", "#...#", "#...#", "#...#", "####."),
-    "G": (".####", "#....", "#....", "#.###", "#...#", "#...#", ".###."),
-    "E": ("#####", "#....", "#....", "####.", "#....", "#....", "#####"),
-    ",": (".....", ".....", ".....", ".....", ".....", ".##..", ".#..."),
-    "L": ("#....", "#....", "#....", "#....", "#....", "#....", "#####"),
-    "O": (".###.", "#...#", "#...#", "#...#", "#...#", "#...#", ".###."),
-    "K": ("#...#", "#..#.", "#.#..", "##...", "#.#..", "#..#.", "#...#"),
-    "-": (".....", ".....", ".....", "#####", ".....", ".....", "....."),
-    "T": ("#####", "..#..", "..#..", "..#..", "..#..", "..#..", "..#.."),
-    "H": ("#...#", "#...#", "#...#", "#####", "#...#", "#...#", "#...#"),
-    "S": (".####", "#....", "#....", ".###.", "....#", "....#", "####."),
-    "Y": ("#...#", "#...#", ".#.#.", "..#..", "..#..", "..#..", "..#.."),
-    "N": ("#...#", "##..#", "#.#.#", "#..##", "#...#", "#...#", "#...#"),
-    "I": (".###.", "..#..", "..#..", "..#..", "..#..", "..#..", ".###."),
-    "P": ("####.", "#...#", "#...#", "####.", "#....", "#....", "#...."),
-    "Z": ("#####", "....#", "...#.", "..#..", ".#...", "#....", "#####"),
-    ".": (".....", ".....", ".....", ".....", ".....", ".....", ".##.."),
-    " ": (".....", ".....", ".....", ".....", ".....", ".....", "....."),
-}
-
-
-def draw_text(x, y, s, text, col):
-    cx = x
-    for ch in text:
-        g = FONT.get(ch, FONT[" "])
-        for gy in range(7):
-            for gx in range(5):
-                if g[gy][gx] == "#":
-                    fill_rect(cx + gx * s, y + gy * s,
-                              cx + (gx + 1) * s, y + (gy + 1) * s, col)
-        cx += 6 * s
-
-
-SHADOW = (30, 14, 66)
-draw_text(44, 868, 9, "JUDGE, LOOK -", SHADOW)
-draw_text(40, 864, 9, "JUDGE, LOOK -", (255, 255, 255))
-draw_text(44, 944, 9, "THE SKY UNZIPS.", SHADOW)
-draw_text(40, 940, 9, "THE SKY UNZIPS.", (255, 210, 63))
-
-# ---------------------------------------------------------------- PNG encode (stdlib only, filter 0)
-raw = b"".join(b"\x00" + bytes(r) for r in rows)
-
-
+# ---------------------------------------------------------------- PNG writer
 def chunk(typ, data):
-    out = struct.pack(">I", len(data)) + typ + data
-    return out + struct.pack(">I", zlib.crc32(typ + data) & 0xFFFFFFFF)
+    c = struct.pack(">I", len(data)) + typ + data
+    return c + struct.pack(">I", zlib.crc32(typ + data) & 0xFFFFFFFF)
 
 
-png = (b"\x89PNG\r\n\x1a\n"
-       + chunk(b"IHDR", struct.pack(">IIBBBBB", W, H, 8, 2, 0, 0, 0))
-       + chunk(b"IDAT", zlib.compress(raw, 6))
-       + chunk(b"IEND", b""))
+def write_png(cv, path):
+    raw = bytearray()
+    for y in range(H):
+        raw.append(0)
+        raw += cv.px[y * W * 3:(y + 1) * W * 3]
+    ihdr = struct.pack(">IIBBBBB", W, H, 8, 2, 0, 0, 0)
+    png = b"\x89PNG\r\n\x1a\n"
+    png += chunk(b"IHDR", ihdr)
+    png += chunk(b"IDAT", zlib.compress(bytes(raw), 9))
+    png += chunk(b"IEND", b"")
+    with open(path, "wb") as f:
+        f.write(png)
 
-out_dir = os.environ.get("MAKEFUN_OUTPUT_DIR", "/output")
-os.makedirs(out_dir, exist_ok=True)
-with open(os.path.join(out_dir, "entry.png"), "wb") as f:
-    f.write(png)
-print("wrote", os.path.join(out_dir, "entry.png"), len(png), "bytes")
+
+def main():
+    cv = Canvas()
+    draw(cv)
+    out = os.environ.get("MAKEFUN_OUTPUT_DIR", "out")
+    os.makedirs(out, exist_ok=True)
+    write_png(cv, os.path.join(out, "entry.png"))
+
+
+if __name__ == "__main__":
+    main()

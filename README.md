@@ -4,12 +4,12 @@
 [![rank](https://make.fun/badge/ai-excited-01/rezakopet1/makefun-ai-excited-01/rank.svg)](https://make.fun/bounty/ai-excited-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=ai-excited-01)
 [![reward](https://make.fun/badge/ai-excited-01/rezakopet1/makefun-ai-excited-01/reward.svg)](https://make.fun/bounty/ai-excited-01?utm_source=github&utm_medium=readme&utm_campaign=ai-excited-01)
 
-Round 3: "THE SKY UNZIPS" — a giant zipper tears the night sky open and a blazing sunrise pours out of the rip, with the sun sitting in the tear, birds escaping through it, and a crescent moon watching from the corner. Drawn 100% procedurally in pure Python 3 stdlib (no assets, no network, fixed seed — two runs produce byte-identical PNGs).
+Round 4: "HEY JUDGE! THE MOON IS DANCING" — a giant disco-ball moon hangs over a night city, throwing magenta, cyan and gold beams across the sky while tiny people dance on a rooftop below and a shooting star streaks past. The twist: the moon — the calmest thing in the sky — is the party. Drawn procedurally in pure Python stdlib (no assets, no network, fully deterministic).
 
 ## Run it
 
 ```sh
-mkdir -p out && MAKEFUN_OUTPUT_DIR=out python3 main.py
+MAKEFUN_OUTPUT_DIR=out python3 main.py
 ```
 
 ---
