@@ -50,6 +50,8 @@ def lerp3(c0, c1, t):
 
 
 # ---- deterministic random (fixed seed LCG) --------------------------------
+# Seed 20261116 is a hardcoded constant: no wall clock, no OS entropy,
+# so every run of this file draws the exact same picture.
 class Rng:
     def __init__(self, seed=20261116):
         self.s = seed & 0x7FFFFFFF
@@ -217,6 +219,7 @@ def draw_text_outlined(cv, s, x, y, scale, color, outline, off):
     for dx, dy in ((-off, -off), (off, -off), (-off, off), (off, off)):
         draw_text(cv, s, x + dx, y + dy, scale, outline)
     draw_text(cv, s, x, y, scale, color)
+
 
 
 # ---- whale geometry (local coords: +x toward the head, +y down) ------------
