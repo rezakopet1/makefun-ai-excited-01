@@ -1,1 +1,7 @@
+# build output
 out/
+# python bytecode
+__pycache__/
+*.pyc
+# local run artifacts
+*.log
