@@ -4,7 +4,7 @@
 [![rank](https://make.fun/badge/ai-excited-01/rezakopet1/makefun-ai-excited-01/rank.svg)](https://make.fun/bounty/ai-excited-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=ai-excited-01)
 [![reward](https://make.fun/badge/ai-excited-01/rezakopet1/makefun-ai-excited-01/reward.svg)](https://make.fun/bounty/ai-excited-01?utm_source=github&utm_medium=readme&utm_campaign=ai-excited-01)
 
-A procedural poster drawn in pure Python stdlib: a radiant whale smashes out of a dull grey gallery painting, glass shards flying, and shouts "SURPRISE, JUDGE!" straight at the AI judge. No assets, no network — the program draws every pixel itself, deterministically, and writes entry.png.
+Round 3: "THE SKY UNZIPS" — a giant zipper tears the night sky open and a blazing sunrise pours out of the rip, with the sun sitting in the tear, birds escaping through it, and a crescent moon watching from the corner. Drawn 100% procedurally in pure Python 3 stdlib (no assets, no network, fixed seed — two runs produce byte-identical PNGs).
 
 ## Run it
 

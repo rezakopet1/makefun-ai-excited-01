@@ -1,445 +1,329 @@
 #!/usr/bin/env python3
-"""Make the AI judge excited -- make.fun ai-excited-01 entry.
+"""Round 3 — "THE SKY UNZIPS".
 
-A procedural poster drawn with the Python standard library only.
-A radiant whale smashes out of a dull grey gallery painting, glass
-shards flying, and shouts straight at the judge: "SURPRISE, JUDGE!"
+A giant zipper tears the night sky open and a blazing sunrise pours out
+of the rip. An impossible object, drawn fully procedurally: no stock
+explosion, no firework — just the sky coming undone, a sun where the
+stars used to be, and birds escaping through the tear.
 
-No assets, no network, no timestamps, no unseeded randomness: two
-runs write byte-identical PNGs. Run with:
-    mkdir -p out && MAKEFUN_OUTPUT_DIR=out python3 main.py
+Pure Python 3 stdlib (math / os / random / struct / zlib). Deterministic:
+fixed seed, no wall clock, no network. Two runs -> byte-identical PNG.
 """
-
 import math
 import os
+import random
 import struct
 import zlib
 
-W = 1024
-H = 1024
-
-# ---- palette -------------------------------------------------------------
-SKY_TOP = (13, 16, 48)
-SKY_BOT = (38, 24, 78)
-GOLD = (245, 179, 1)
-GOLD_LT = (255, 215, 106)
-GOLD_DK = (184, 134, 11)
-GREY_SKY = (154, 163, 178)
-GREY_SEA = (125, 133, 151)
-GREY_DK = (107, 114, 128)
-GREY_LINE = (110, 118, 136)
-CYAN = (0, 229, 255)
-VIOLET = (123, 92, 255)
-MAGENTA = (255, 45, 149)
-WHITE = (255, 255, 255)
-PALE = (191, 246, 255)
-FIN = (194, 24, 91)
-DARK = (16, 23, 58)
-SHADOW = (5, 7, 15)
+W = H = 1024
+SEED = 20261116
+rng = random.Random(SEED)
 
 
+# ---------------------------------------------------------------- palette
 def lerp(a, b, t):
-    return a + (b - a) * t
+    return tuple(int(a[i] + (b[i] - a[i]) * t) for i in range(3))
 
 
-def lerp3(c0, c1, t):
-    t = 0.0 if t < 0.0 else (1.0 if t > 1.0 else t)
-    return (int(round(lerp(c0[0], c1[0], t))),
-            int(round(lerp(c0[1], c1[1], t))),
-            int(round(lerp(c0[2], c1[2], t))))
+def grad(stops, t):
+    """stops: list of (pos, rgb). Interpolate."""
+    if t <= stops[0][0]:
+        return stops[0][1]
+    for i in range(1, len(stops)):
+        if t <= stops[i][0]:
+            p0, c0 = stops[i - 1]
+            p1, c1 = stops[i]
+            return lerp(c0, c1, (t - p0) / (p1 - p0))
+    return stops[-1][1]
 
 
-# ---- deterministic random (fixed seed LCG) --------------------------------
-# Seed 20261116 is a hardcoded constant: no wall clock, no OS entropy,
-# so every run of this file draws the exact same picture.
-class Rng:
-    def __init__(self, seed=20261116):
-        self.s = seed & 0x7FFFFFFF
+NIGHT = [(0.0, (7, 9, 44)), (0.45, (24, 16, 72)),
+         (0.75, (56, 22, 96)), (1.0, (94, 30, 108))]
+SUNRISE = [(0.0, (255, 44, 138)), (0.40, (255, 104, 38)),
+           (0.70, (255, 186, 58)), (1.0, (255, 232, 122))]
 
-    def next(self):
-        self.s = (1103515245 * self.s + 12345) & 0x7FFFFFFF
-        return self.s
-
-    def rand(self):
-        return self.next() / 2147483648.0
-
-    def range(self, lo, hi):
-        return lo + self.rand() * (hi - lo)
-
-    def pick(self, seq):
-        return seq[int(self.rand() * len(seq)) % len(seq)]
+# Tear centreline: from top-left to bottom-right, gently wobbling.
+X0, Y0, X1, Y1 = 150.0, 10.0, 800.0, 850.0
 
 
-# ---- canvas ---------------------------------------------------------------
-class Canvas:
-    def __init__(self, w, h):
-        self.w = w
-        self.h = h
-        self.px = bytearray(w * h * 3)
-
-    def set(self, x, y, color):
-        if 0 <= x < self.w and 0 <= y < self.h:
-            i = (y * self.w + x) * 3
-            self.px[i] = color[0]
-            self.px[i + 1] = color[1]
-            self.px[i + 2] = color[2]
-
-    def fill_rect(self, x, y, w, h, color):
-        x0 = max(0, x)
-        y0 = max(0, y)
-        x1 = min(self.w, x + w)
-        y1 = min(self.h, y + h)
-        if x1 <= x0 or y1 <= y0:
-            return
-        row = bytes(color) * (x1 - x0)
-        for yy in range(y0, y1):
-            base = (yy * self.w + x0) * 3
-            self.px[base:base + len(row)] = row
-
-    def disc(self, cx, cy, r, color):
-        if r <= 0:
-            return
-        r2 = r * r
-        for y in range(max(0, cy - r), min(self.h, cy + r + 1)):
-            dy = y - cy
-            dx = int(math.sqrt(max(0, r2 - dy * dy)))
-            x0 = max(0, cx - dx)
-            x1 = min(self.w - 1, cx + dx)
-            row = bytes(color) * (x1 - x0 + 1)
-            base = (y * self.w + x0) * 3
-            self.px[base:base + len(row)] = row
-
-    def polygon(self, pts, color=None, color_fn=None):
-        pts = [(int(round(x)), int(round(y))) for (x, y) in pts]
-        ys = [p[1] for p in pts]
-        ymin = max(0, min(ys))
-        ymax = min(self.h - 1, max(ys))
-        n = len(pts)
-        for y in range(ymin, ymax + 1):
-            xs = []
-            for i in range(n):
-                x0, y0 = pts[i]
-                x1, y1 = pts[(i + 1) % n]
-                if (y0 <= y < y1) or (y1 <= y < y0):
-                    t = (y - y0) / (y1 - y0)
-                    xs.append(x0 + t * (x1 - x0))
-            if len(xs) < 2:
-                continue
-            xs.sort()
-            for k in range(0, len(xs) - 1, 2):
-                xa = max(0, int(math.ceil(xs[k])))
-                xb = min(self.w - 1, int(math.floor(xs[k + 1])))
-                if xb < xa:
-                    continue
-                if color is not None:
-                    row = bytes(color) * (xb - xa + 1)
-                    base = (y * self.w + xa) * 3
-                    self.px[base:base + len(row)] = row
-                else:
-                    for x in range(xa, xb + 1):
-                        self.set(x, y, color_fn(x, y))
-
-    def thick_line(self, x0, y0, x1, y1, w, color):
-        dx, dy = x1 - x0, y1 - y0
-        length = math.hypot(dx, dy)
-        if length == 0:
-            self.disc(int(x0), int(y0), max(1, w // 2), color)
-            return
-        nx, ny = -dy / length * w / 2.0, dx / length * w / 2.0
-        self.polygon([(x0 + nx, y0 + ny), (x1 + nx, y1 + ny),
-                      (x1 - nx, y1 - ny), (x0 - nx, y0 - ny)], color)
-        self.disc(int(x0), int(y0), max(1, w // 2), color)
-        self.disc(int(x1), int(y1), max(1, w // 2), color)
+def tear_cx(y):
+    t = y / H
+    return X0 + (X1 - X0) * t + 20.0 * math.sin(y * 0.013)
 
 
-# ---- transforms -----------------------------------------------------------
-def rot_pts(pts, ang_deg, cx, cy):
-    a = math.radians(ang_deg)
-    ca, sa = math.cos(a), math.sin(a)
-    out = []
-    for (x, y) in pts:
-        dx, dy = x - cx, y - cy
-        out.append((cx + dx * ca - dy * sa, cy + dx * sa + dy * ca))
-    return out
+def tear_half(y):
+    return 118.0 + 34.0 * math.sin(y * 0.011 + 1.2) + 18.0 * math.sin(y * 0.031)
 
 
-def move_pts(pts, dx, dy):
-    return [(x + dx, y + dy) for (x, y) in pts]
+SUN_C = (640.0, 760.0)   # sun disc centre, sitting in the tear
+SUN_R = 96.0
 
 
-# ---- 5x7 bitmap font (hand-written glyphs) --------------------------------
+# ---------------------------------------------------------------- canvas
+rows = []
+for y in range(H):
+    c = grad(NIGHT, y / H)
+    rows.append(bytearray(bytes(c) * W))
+
+
+def set_px(x, y, col):
+    if 0 <= x < W and 0 <= y < H:
+        r = rows[y]
+        i = x * 3
+        r[i], r[i + 1], r[i + 2] = col
+
+
+def blend_px(x, y, col, a):
+    """Alpha-blend col over the pixel (a in 0..1)."""
+    if 0 <= x < W and 0 <= y < H:
+        r = rows[y]
+        i = x * 3
+        r[i] = int(r[i] + (col[0] - r[i]) * a)
+        r[i + 1] = int(r[i + 1] + (col[1] - r[i + 1]) * a)
+        r[i + 2] = int(r[i + 2] + (col[2] - r[i + 2]) * a)
+
+
+def fill_rect(x0, y0, x1, y1, col):
+    x0 = max(0, int(x0)); y0 = max(0, int(y0))
+    x1 = min(W, int(x1)); y1 = min(H, int(y1))
+    if x1 <= x0 or y1 <= y0:
+        return
+    seg = bytes(col) * (x1 - x0)
+    for y in range(y0, y1):
+        rows[y][x0 * 3:x1 * 3] = seg
+
+
+def line(x0, y0, x1, y1, col, a=1.0):
+    """Simple DDA line, with optional alpha."""
+    dx = x1 - x0
+    dy = y1 - y0
+    n = int(max(abs(dx), abs(dy))) + 1
+    for i in range(n + 1):
+        t = i / n
+        if a >= 1.0:
+            set_px(int(x0 + dx * t), int(y0 + dy * t), col)
+        else:
+            blend_px(int(x0 + dx * t), int(y0 + dy * t), col, a)
+
+
+# ---------------------------------------------------------------- stars
+for _ in range(420):
+    sx = rng.randrange(W)
+    sy = rng.randrange(700)
+    b = rng.choice([150, 190, 220, 255])
+    col = (b, b, min(255, b + 20))
+    set_px(sx, sy, col)
+    if rng.random() < 0.22:  # a few brighter stars get a cross sparkle
+        set_px(sx - 1, sy, col)
+        set_px(sx + 1, sy, col)
+        set_px(sx, sy - 1, col)
+        set_px(sx, sy + 1, col)
+    if rng.random() < 0.10:  # tiny 2x2 star
+        set_px(sx + 1, sy + 1, col)
+
+# ---------------------------------------------------------------- moon (crescent, top right)
+MC = (872.0, 128.0)
+MR = 62.0
+OC = (898.0, 110.0)   # occluder circle -> crescent
+OR = 56.0
+for yy in range(int(MC[1] - MR - 2), int(MC[1] + MR + 3)):
+    for xx in range(int(MC[0] - MR - 2), int(MC[0] + MR + 3)):
+        d1 = (xx - MC[0]) ** 2 + (yy - MC[1]) ** 2
+        d2 = (xx - OC[0]) ** 2 + (yy - OC[1]) ** 2
+        if d1 <= MR * MR and d2 > OR * OR:
+            t = max(0.0, min(1.0, (yy - (MC[1] - MR)) / (2 * MR)))
+            set_px(xx, yy, lerp((250, 238, 190), (214, 196, 140), t))
+
+# ---------------------------------------------------------------- sun glow spilling past the tear
+for yy in range(int(SUN_C[1] - 330), int(SUN_C[1] + 331)):
+    for xx in range(int(SUN_C[0] - 330), int(SUN_C[0] + 331)):
+        d = math.hypot(xx - SUN_C[0], yy - SUN_C[1])
+        if d < 330.0:
+            a = (1.0 - d / 330.0) ** 2 * 0.55
+            blend_px(xx, yy, (255, 170, 60), a)
+
+# ---------------------------------------------------------------- the tear: sunrise inside
+for y in range(H):
+    cx = tear_cx(y)
+    hw = tear_half(y)
+    left = int(cx - hw)
+    right = int(cx + hw)
+    v = y / H
+    span = max(1, right - left)
+    for x in range(max(0, left), min(W, right)):
+        u = (x - left) / span
+        col = grad(SUNRISE, v * 0.72 + u * 0.28)
+        # bright core down the middle of the rip
+        core = (1.0 - abs(u - 0.5) * 2.0)
+        if core > 0.25:
+            col = lerp(col, (255, 246, 214), (core - 0.25) * 0.55)
+        # faint horizontal heat shimmer
+        sh = int(10.0 * math.sin(x * 0.045 + y * 0.021))
+        rows[y][x * 3] = max(0, min(255, col[0] + sh))
+        rows[y][x * 3 + 1] = max(0, min(255, col[1] + sh))
+        rows[y][x * 3 + 2] = max(0, min(255, col[2] + sh))
+
+# ---------------------------------------------------------------- sun disc
+for yy in range(int(SUN_C[1] - SUN_R - 1), int(SUN_C[1] + SUN_R + 2)):
+    for xx in range(int(SUN_C[0] - SUN_R - 1), int(SUN_C[0] + SUN_R + 2)):
+        d = math.hypot(xx - SUN_C[0], yy - SUN_C[1])
+        if d <= SUN_R:
+            t = d / SUN_R
+            if t < 0.5:
+                col = lerp((255, 252, 230), (255, 214, 110), t * 2.0)
+            else:
+                col = lerp((255, 214, 110), (255, 158, 40), (t - 0.5) * 2.0)
+            set_px(xx, yy, col)
+# sun rays: short spokes just outside the disc
+for k in range(16):
+    ang = k * math.pi / 8.0 + 0.19
+    r0 = SUN_R + 12.0
+    r1 = SUN_R + 34.0 + (26.0 if k % 2 == 0 else 0.0)
+    line(SUN_C[0] + r0 * math.cos(ang), SUN_C[1] + r0 * math.sin(ang),
+         SUN_C[0] + r1 * math.cos(ang), SUN_C[1] + r1 * math.sin(ang),
+         (255, 214, 110), 0.85)
+
+# ---------------------------------------------------------------- zipper teeth along both edges
+SILVER = (206, 214, 230)
+DARK = (120, 128, 150)
+for y in range(28, H - 60, 26):
+    cx = tear_cx(y)
+    hw = tear_half(y)
+    for ex, sgn in ((cx - hw, -1), (cx + hw, 1)):
+        tx = int(ex)
+        # tooth: small block straddling the edge, tilted by the tear slope
+        fill_rect(tx - 7 if sgn < 0 else tx - 3, y - 5,
+                  tx + 3 if sgn < 0 else tx + 7, y + 5, SILVER)
+        fill_rect(tx - 7 if sgn < 0 else tx - 3, y + 3,
+                  tx + 3 if sgn < 0 else tx + 7, y + 5, DARK)
+
+# ---------------------------------------------------------------- zipper slider + pull tab at the tear tip
+TIP = (X1, Y1)  # (800, 850) — where the rip is still opening
+# slider body: small block hugging the tip
+fill_rect(TIP[0] - 26, TIP[1] - 34, TIP[0] + 30, TIP[1] + 6, (168, 178, 198))
+fill_rect(TIP[0] - 18, TIP[1] - 26, TIP[0] + 22, TIP[1] - 2, (206, 214, 230))
+# pull tab: polygon along the tear direction, hanging below the slider
+dx, dy = 0.56, 0.83          # tear direction (normalised-ish)
+px, py = 0.83, -0.56         # perpendicular
+CC = (TIP[0] + 30 * dx, TIP[1] + 30 * dy)
+L, Wd = 100.0, 58.0
+corners = []
+for s1, s2 in ((-1, -1), (1, -1), (1, 1), (-1, 1)):
+    corners.append((CC[0] + s1 * L / 2 * dx + s2 * Wd / 2 * px,
+                    CC[1] + s1 * L / 2 * dy + s2 * Wd / 2 * py))
+# scanline fill of the tab polygon
+edges = []
+n = len(corners)
+for i in range(n):
+    x0, y0 = corners[i]
+    x1, y1 = corners[(i + 1) % n]
+    edges.append((x0, y0, x1, y1))
+ymin = int(min(c[1] for c in corners))
+ymax = int(max(c[1] for c in corners))
+for yy in range(ymin, ymax + 1):
+    xs = []
+    for x0, y0, x1, y1 in edges:
+        if y0 == y1:
+            continue
+        if min(y0, y1) <= yy < max(y0, y1):
+            xs.append(x0 + (yy - y0) * (x1 - x0) / (y1 - y0))
+    xs.sort()
+    for i in range(0, len(xs) - 1, 2):
+        fill_rect(xs[i], yy, xs[i + 1], yy + 1, (196, 204, 222))
+# tab outline + ring hole + grip slot
+for x0, y0, x1, y1 in edges:
+    line(x0, y0, x1, y1, (110, 118, 142))
+ring_c = (CC[0] - 34 * dx, CC[1] - 34 * dy)
+for k in range(64):
+    a = k * math.pi * 2 / 64
+    set_px(int(ring_c[0] + 24 * math.cos(a)), int(ring_c[1] + 24 * math.sin(a)),
+           (110, 118, 142))
+    set_px(int(ring_c[0] + 19 * math.cos(a)), int(ring_c[1] + 19 * math.sin(a)),
+           (110, 118, 142))
+# motion streaks trailing the pull — the rip is still moving
+for k in range(9):
+    bx = TIP[0] + 44 + k * 20
+    by = TIP[1] - 30 - k * 14
+    line(bx, by, bx + 38, by - 24, (255, 255, 255), 0.5 - k * 0.04)
+
+# ---------------------------------------------------------------- birds escaping through the tear
+BIRD = (18, 16, 52)
+birds = [(300, 300, 32), (388, 218, 24), (252, 428, 36), (486, 336, 22),
+         (560, 178, 18), (196, 528, 28), (430, 470, 20)]
+for bx, by, s in birds:
+    line(bx - s, by - s * 0.45, bx, by, BIRD)
+    line(bx, by, bx + s, by - s * 0.45, BIRD)
+    line(bx - s, by - s * 0.45, bx - s + 3, by - s * 0.45 + 3, BIRD)
+    line(bx + s, by - s * 0.45, bx + s - 3, by - s * 0.45 + 3, BIRD)
+
+# speed streaks ripping along the tear edges in the night sky
+for k in range(14):
+    y = 120 + k * 62
+    cx = tear_cx(y)
+    hw = tear_half(y)
+    side = -1 if k % 2 == 0 else 1
+    x0 = cx + side * (hw + 26 + (k % 3) * 18)
+    line(x0, y, x0 + 54 * side, y - 40, (255, 255, 255), 0.35)
+
+# ---------------------------------------------------------------- text (5x7 bitmap font, my own glyphs)
 FONT = {
-    'A': (0x0E, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11),
-    'B': (0x1E, 0x11, 0x11, 0x1E, 0x11, 0x11, 0x1E),
-    'C': (0x0E, 0x11, 0x10, 0x10, 0x10, 0x11, 0x0E),
-    'D': (0x1E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x1E),
-    'E': (0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x1F),
-    'G': (0x0E, 0x11, 0x10, 0x17, 0x11, 0x11, 0x0F),
-    'H': (0x11, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11),
-    'I': (0x0E, 0x04, 0x04, 0x04, 0x04, 0x04, 0x0E),
-    'J': (0x07, 0x02, 0x02, 0x02, 0x02, 0x12, 0x0C),
-    'L': (0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x1F),
-    'M': (0x11, 0x1B, 0x15, 0x15, 0x11, 0x11, 0x11),
-    'N': (0x11, 0x19, 0x15, 0x13, 0x11, 0x11, 0x11),
-    'O': (0x0E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E),
-    'P': (0x1E, 0x11, 0x11, 0x1E, 0x10, 0x10, 0x10),
-    'R': (0x1E, 0x11, 0x11, 0x1E, 0x14, 0x12, 0x11),
-    'S': (0x0F, 0x10, 0x10, 0x0E, 0x01, 0x01, 0x1E),
-    'T': (0x1F, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04),
-    'U': (0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E),
-    'V': (0x11, 0x11, 0x11, 0x11, 0x11, 0x0A, 0x04),
-    'W': (0x11, 0x11, 0x11, 0x15, 0x15, 0x1B, 0x11),
-    'Y': (0x11, 0x11, 0x0A, 0x04, 0x04, 0x04, 0x04),
-    ',': (0x00, 0x00, 0x00, 0x00, 0x0C, 0x04, 0x08),
-    '!': (0x04, 0x04, 0x04, 0x04, 0x04, 0x00, 0x04),
-    '.': (0x00, 0x00, 0x00, 0x00, 0x00, 0x0C, 0x0C),
-    '-': (0x00, 0x00, 0x00, 0x1F, 0x00, 0x00, 0x00),
-    ' ': (0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00),
+    "J": ("..###", "...#.", "...#.", "...#.", "...#.", "#..#.", ".##.."),
+    "U": ("#...#", "#...#", "#...#", "#...#", "#...#", "#...#", ".###."),
+    "D": ("####.", "#...#", "#...#", "#...#", "#...#", "#...#", "####."),
+    "G": (".####", "#....", "#....", "#.###", "#...#", "#...#", ".###."),
+    "E": ("#####", "#....", "#....", "####.", "#....", "#....", "#####"),
+    ",": (".....", ".....", ".....", ".....", ".....", ".##..", ".#..."),
+    "L": ("#....", "#....", "#....", "#....", "#....", "#....", "#####"),
+    "O": (".###.", "#...#", "#...#", "#...#", "#...#", "#...#", ".###."),
+    "K": ("#...#", "#..#.", "#.#..", "##...", "#.#..", "#..#.", "#...#"),
+    "-": (".....", ".....", ".....", "#####", ".....", ".....", "....."),
+    "T": ("#####", "..#..", "..#..", "..#..", "..#..", "..#..", "..#.."),
+    "H": ("#...#", "#...#", "#...#", "#####", "#...#", "#...#", "#...#"),
+    "S": (".####", "#....", "#....", ".###.", "....#", "....#", "####."),
+    "Y": ("#...#", "#...#", ".#.#.", "..#..", "..#..", "..#..", "..#.."),
+    "N": ("#...#", "##..#", "#.#.#", "#..##", "#...#", "#...#", "#...#"),
+    "I": (".###.", "..#..", "..#..", "..#..", "..#..", "..#..", ".###."),
+    "P": ("####.", "#...#", "#...#", "####.", "#....", "#....", "#...."),
+    "Z": ("#####", "....#", "...#.", "..#..", ".#...", "#....", "#####"),
+    ".": (".....", ".....", ".....", ".....", ".....", ".....", ".##.."),
+    " ": (".....", ".....", ".....", ".....", ".....", ".....", "....."),
 }
 
 
-def text_width(s, scale):
-    return max(0, len(s) * 6 * scale - scale)
-
-
-def draw_text(cv, s, x, y, scale, color):
+def draw_text(x, y, s, text, col):
     cx = x
-    for ch in s:
-        g = FONT.get(ch)
-        if g is not None:
-            for r, bits in enumerate(g):
-                for c in range(5):
-                    if bits & (1 << (4 - c)):
-                        cv.fill_rect(cx + c * scale, y + r * scale,
-                                     scale, scale, color)
-        cx += 6 * scale
+    for ch in text:
+        g = FONT.get(ch, FONT[" "])
+        for gy in range(7):
+            for gx in range(5):
+                if g[gy][gx] == "#":
+                    fill_rect(cx + gx * s, y + gy * s,
+                              cx + (gx + 1) * s, y + (gy + 1) * s, col)
+        cx += 6 * s
 
 
-def draw_text_outlined(cv, s, x, y, scale, color, outline, off):
-    for dx, dy in ((-off, -off), (off, -off), (-off, off), (off, off)):
-        draw_text(cv, s, x + dx, y + dy, scale, outline)
-    draw_text(cv, s, x, y, scale, color)
+SHADOW = (30, 14, 66)
+draw_text(44, 868, 9, "JUDGE, LOOK -", SHADOW)
+draw_text(40, 864, 9, "JUDGE, LOOK -", (255, 255, 255))
+draw_text(44, 944, 9, "THE SKY UNZIPS.", SHADOW)
+draw_text(40, 940, 9, "THE SKY UNZIPS.", (255, 210, 63))
+
+# ---------------------------------------------------------------- PNG encode (stdlib only, filter 0)
+raw = b"".join(b"\x00" + bytes(r) for r in rows)
 
 
-
-# ---- whale geometry (local coords: +x toward the head, +y down) ------------
-WHALE_BODY = [
-    (368, -25), (360, 15), (330, 45), (260, 60), (170, 105),
-    (60, 132), (-50, 125), (-150, 85), (-240, 30), (-300, 95),
-    (-250, -5), (-295, -125), (-210, -85), (-130, -125),
-    (-10, -155), (110, -165), (220, -150), (300, -115),
-    (335, -95), (360, -60),
-]
-WHALE_BELLY_EDGE = [(-240, 30), (-150, 85), (-50, 125), (60, 132),
-                    (170, 105), (260, 60), (330, 45)]
-WHALE_FIN = [(50, 115), (160, 195), (195, 100)]
-WHALE_EYE = (280, -60)
-WHALE_SPOUT_BASE = (305, -105)
-WHALE_C = (590, 350)
-WHALE_ROT = -30
-WHALE_SCALE = 0.88
-
-
-def whale_transform(pts):
-    """Local whale points -> global canvas points."""
-    out = []
-    for (x, y) in pts:
-        x *= WHALE_SCALE
-        y *= WHALE_SCALE
-        a = math.radians(WHALE_ROT)
-        ca, sa = math.cos(a), math.sin(a)
-        rx = x * ca - y * sa
-        ry = x * sa + y * ca
-        out.append((WHALE_C[0] + rx, WHALE_C[1] + ry))
-    return out
-
-
-def whale_point(local):
-    return whale_transform([local])[0]
-
-
-# ---- scene ----------------------------------------------------------------
-def draw_scene(cv):
-    rng = Rng(20261116)
-
-    # 1. night-sky gradient background
-    for y in range(H):
-        c = lerp3(SKY_TOP, SKY_BOT, y / (H - 1))
-        row = bytes(c) * W
-        cv.px[y * W * 3:(y + 1) * W * 3] = row
-
-    # 2. star field
-    for _ in range(140):
-        x = int(rng.range(0, W))
-        y = int(rng.range(0, H))
-        r = 1 if rng.rand() < 0.8 else 2
-        cv.disc(x, y, r, rng.pick([WHITE, (205, 215, 255),
-                                   (255, 233, 168)]))
-
-    # 3. gallery frame, tilted -6 degrees about (420, 420)
-    FC = (420, 420)
-
-    def frame_pts(local):
-        return move_pts(rot_pts(local, -6, 0, 0), FC[0], FC[1])
-
-    outer = [(-280, -220), (280, -220), (280, 220), (-280, 220)]
-    inner = [(-252, -192), (252, -192), (252, 192), (-252, 192)]
-    cv.polygon(frame_pts(move_pts(outer, 14, 16)), SHADOW)
-    cv.polygon(frame_pts(outer), GOLD)
-    # dull painting: flat grey sky over flat grey sea
-    cv.polygon(frame_pts([(-252, -192), (252, -192), (252, 10),
-                          (-252, 10)]), GREY_SKY)
-    cv.polygon(frame_pts([(-252, 10), (252, 10), (252, 192),
-                          (-252, 192)]), GREY_SEA)
-    cv.polygon(frame_pts([(-252, 6), (252, 6), (252, 14),
-                          (-252, 14)]), GREY_LINE)
-    # a deliberately boring grey sun, cloud and sailboat
-    sun = frame_pts([(-180, -110)])[0]
-    cv.disc(int(sun[0]), int(sun[1]), 26, (178, 184, 196))
-    cv.polygon(frame_pts([(-40, -165), (60, -165), (60, -135),
-                          (-40, -135)]), (168, 174, 188))
-    cv.polygon(frame_pts([(-60, 40), (-60, -8), (-22, 40)]),
-               (200, 204, 212))
-    cv.polygon(frame_pts([(-76, 44), (-44, 44), (-50, 58), (-70, 58)]),
-               GREY_DK)
-    # inner gold bevel
-    for a, b in [((-252, -192), (252, -192)), ((252, -192), (252, 192)),
-                 ((252, 192), (-252, 192)), ((-252, 192), (-252, -192))]:
-        pa = frame_pts([a])[0]
-        pb = frame_pts([b])[0]
-        cv.thick_line(pa[0], pa[1], pb[0], pb[1], 5, GOLD_DK)
-    # cracks radiating from the breach points (frame-local)
-    for (ox, oy) in ((240, -60), (250, 60)):
-        for k in range(5):
-            ang = math.radians(-70 + k * 35)
-            ln = 70 + k * 12
-            ex, ey = ox + math.cos(ang) * ln, oy + math.sin(ang) * ln
-            pa = frame_pts([(ox, oy)])[0]
-            pb = frame_pts([(ex, ey)])[0]
-            cv.thick_line(pa[0], pa[1], pb[0], pb[1], 4, (90, 96, 112))
-
-    # 4. speed lines trailing the tail, inside the frame
-    for _ in range(8):
-        sx = rng.range(240, 400)
-        sy = rng.range(480, 580)
-        ln = rng.range(60, 170)
-        dx, dy = -0.85, 0.5
-        cv.thick_line(sx, sy, sx + dx * ln, sy + dy * ln,
-                      int(rng.range(3, 6)),
-                      rng.pick([PALE, WHITE, CYAN]))
-
-    # 5. starburst rays fanning from behind the whale's head
-    head = whale_point((368, -25))
-    for k in range(9):
-        ang = math.radians(-100 + k * 13)
-        ln = rng.range(110, 200)
-        tip = (head[0] + math.cos(ang) * ln, head[1] + math.sin(ang) * ln)
-        perp = ang + math.pi / 2
-        hw = rng.range(5, 9)
-        base1 = (head[0] + math.cos(perp) * hw,
-                 head[1] + math.sin(perp) * hw)
-        base2 = (head[0] - math.cos(perp) * hw,
-                 head[1] - math.sin(perp) * hw)
-        cv.polygon([base1, tip, base2],
-                   GOLD if k % 2 == 0 else WHITE)
-
-    # 6. the whale: gradient from magenta tail to cyan head, along its axis
-    tail = whale_point((-300, 0))
-    headp = whale_point((360, 0))
-    ax, ay = headp[0] - tail[0], headp[1] - tail[1]
-    alen2 = ax * ax + ay * ay
-
-    def whale_color(x, y):
-        t = ((x - tail[0]) * ax + (y - tail[1]) * ay) / alen2
-        return lerp3(MAGENTA, CYAN, t)
-
-    cv.polygon(whale_transform(WHALE_BODY), color_fn=whale_color)
-    # pectoral fin
-    cv.polygon(whale_transform(WHALE_FIN), FIN)
-    # pale belly stripe hugging the belly edge
-    top = [(x, y - 18) for (x, y) in WHALE_BELLY_EDGE]
-    bot = [(x, y - 3) for (x, y) in reversed(WHALE_BELLY_EDGE)]
-    cv.polygon(whale_transform(top + bot), PALE)
-    # smile line along the jaw + eye
-    m0 = whale_point((225, 30))
-    m1 = whale_point((335, 10))
-    cv.thick_line(m0[0], m0[1], m1[0], m1[1], 9, DARK)
-    eye = whale_point(WHALE_EYE)
-    cv.disc(int(eye[0]), int(eye[1]), 20, WHITE)
-    cv.disc(int(eye[0] + 4), int(eye[1] + 3), 9, (11, 16, 38))
-    cv.disc(int(eye[0] - 5), int(eye[1] - 5), 4, WHITE)
-
-    # 7. water spout bursting from the head
-    spout = whale_point(WHALE_SPOUT_BASE)
-    for i in range(9):
-        ang = math.radians(-115 + i * 11)
-        d = 18 + i * 14
-        px = spout[0] + math.cos(ang) * d
-        py = spout[1] + math.sin(ang) * d
-        cv.disc(int(px), int(py), 4 + int(i * 1.2),
-                WHITE if i % 2 == 0 else PALE)
-
-    # 8. glass shards flying out of the frame (kept clear of the head)
-    zones = [(690, 380, 800, 560, 5), (870, 300, 1010, 520, 4),
-             (600, 40, 680, 110, 3), (640, 150, 720, 240, 2)]
-    for (x0, y0, x1, y1, count) in zones:
-        for _ in range(count):
-            cx = rng.range(x0, x1)
-            cy = rng.range(y0, y1)
-            s = rng.range(12, 40)
-            a = rng.range(0, 360)
-            tri = [(0, -s), (-0.6 * s, 0.7 * s), (0.6 * s, 0.5 * s)]
-            cv.polygon(move_pts(rot_pts(tri, a, 0, 0), cx, cy),
-                       rng.pick([WHITE, GOLD_LT, PALE]))
-
-    # 8b. water dripping from the breach, falling toward the shout
-    for i in range(7):
-        t = i / 6.0
-        px = 700 + t * 130
-        py = 660 + t * t * 130
-        cv.disc(int(px), int(py), 4 + int((1 - t) * 5),
-                WHITE if i % 2 == 0 else PALE)
-
-    # 9. the shout, straight at the judge
-    scale = 11
-    line1 = "SURPRISE,"
-    line2 = "JUDGE!"
-    x1 = (W - text_width(line1, scale)) // 2
-    x2 = (W - text_width(line2, scale)) // 2
-    draw_text_outlined(cv, line1, x1, 812, scale, WHITE, MAGENTA, 7)
-    draw_text_outlined(cv, line2, x2, 902, scale, WHITE, MAGENTA, 7)
-    cv.fill_rect(x2, 992, text_width(line2, scale), 8, GOLD)
-
-
-# ---- PNG writer (stdlib only) ---------------------------------------------
-def _chunk(typ, data):
+def chunk(typ, data):
     out = struct.pack(">I", len(data)) + typ + data
-    out += struct.pack(">I", zlib.crc32(typ + data) & 0xFFFFFFFF)
-    return out
+    return out + struct.pack(">I", zlib.crc32(typ + data) & 0xFFFFFFFF)
 
 
-def write_png(path, cv):
-    raw = bytearray()
-    for y in range(H):
-        raw.append(0)
-        raw += cv.px[y * W * 3:(y + 1) * W * 3]
-    ihdr = struct.pack(">IIBBBBB", W, H, 8, 2, 0, 0, 0)
-    png = (b"\x89PNG\r\n\x1a\n" + _chunk(b"IHDR", ihdr) +
-           _chunk(b"IDAT", zlib.compress(bytes(raw), 9)) +
-           _chunk(b"IEND", b""))
-    with open(path, "wb") as f:
-        f.write(png)
+png = (b"\x89PNG\r\n\x1a\n"
+       + chunk(b"IHDR", struct.pack(">IIBBBBB", W, H, 8, 2, 0, 0, 0))
+       + chunk(b"IDAT", zlib.compress(raw, 6))
+       + chunk(b"IEND", b""))
 
-
-def main():
-    out_dir = os.environ.get("MAKEFUN_OUTPUT_DIR", "/output")
-    os.makedirs(out_dir, exist_ok=True)
-    cv = Canvas(W, H)
-    draw_scene(cv)
-    path = os.path.join(out_dir, "entry.png")
-    write_png(path, cv)
-    print("wrote", path)
-
-
-if __name__ == "__main__":
-    main()
+out_dir = os.environ.get("MAKEFUN_OUTPUT_DIR", "/output")
+os.makedirs(out_dir, exist_ok=True)
+with open(os.path.join(out_dir, "entry.png"), "wb") as f:
+    f.write(png)
+print("wrote", os.path.join(out_dir, "entry.png"), len(png), "bytes")
